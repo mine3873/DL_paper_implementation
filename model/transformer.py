@@ -2,6 +2,8 @@ import torch
 import torch.nn as nn
 import math
 
+dropout = 0.1
+
 class Softmax(nn.Module):
     def __init__(self, dim):
         super(Softmax, self).__init__()
@@ -54,7 +56,8 @@ class MultiHeadAttention(nn.Module):
             K: (batch_size, seq_len_k, d_model)
             V: (batch_size, seq_len_v, d_model)
             num_heads: number of attention heads
-            mask: (batch_size, seq_len_q, seq_len_k) or (seq_len_q, seq_len_k)
+            src_mask: (batch_size, seq_len_q, seq_len_k) or (seq_len_q, seq_len_k)
+            tgt_mask: (batch_size, seq_len_q, seq_len_k) or (seq_len_q, seq_len_k)
         """
         d_model = Q.size(-1)
         d_k = d_model // num_heads
@@ -93,7 +96,7 @@ class FeedForward(nn.Module):
 
 
 class EncoderBlock(nn.Module):
-    def __init__(self, d_model, num_heads):
+    def __init__(self, d_model, num_heads, dropout=0.1):
         super(EncoderBlock, self).__init__()
         self.d_model = d_model
         self.num_heads = num_heads
@@ -103,19 +106,21 @@ class EncoderBlock(nn.Module):
         
         self.layer_norm1 = torch.nn.LayerNorm(d_model)
         self.layer_norm2 = torch.nn.LayerNorm(d_model)
+        
+        self.dropout = nn.Dropout(dropout)
     
     def forward(self, x, mask=None):
         attn_output = self.multi_head_attention(x, x, x, mask=mask)  
-        x = self.layer_norm1(x + attn_output)  
+        x = self.layer_norm1(x + self.dropout(attn_output))  
         
         ff_output = self.feed_forward(x)  
-        x = self.layer_norm2(x + ff_output)  
+        x = self.layer_norm2(x + self.dropout(ff_output))  
         
         return x
             
     
 class DecoderBlock(nn.Module):
-    def __init__(self, d_model, num_heads):
+    def __init__(self, d_model, num_heads, dropout=0.1):
         super(DecoderBlock, self).__init__()
         self.d_model = d_model
         self.num_heads = num_heads
@@ -128,59 +133,63 @@ class DecoderBlock(nn.Module):
         self.layer_norm2 = torch.nn.LayerNorm(d_model)
         self.layer_norm3 = torch.nn.LayerNorm(d_model)
         
-    def forward(self, x, encoder_output, mask=None):
-        attn_output = self.self_attention(x, x, x, mask=mask) 
-        x = self.layer_norm1(x + attn_output)  
+        self.dropout = nn.Dropout(dropout)
         
-        attn_output = self.encoder_decoder_attention(x, encoder_output, encoder_output)  
-        x = self.layer_norm2(x + attn_output)  
+    def forward(self, x, encoder_output, src_mask=None, tgt_mask=None):
+        attn_output = self.self_attention(x, x, x, mask=tgt_mask) 
+        x = self.layer_norm1(x + self.dropout(attn_output))  
+        
+        attn_output = self.encoder_decoder_attention(x, encoder_output, encoder_output, mask=src_mask)  
+        x = self.layer_norm2(x + self.dropout(attn_output))  
         
         ff_output = self.feed_forward(x)   
-        x = self.layer_norm3(x + ff_output)  
+        x = self.layer_norm3(x + self.dropout(ff_output))  
         
         return x
     
 class Transformer(nn.Module):
-    def __init__(self, vocab_size, d_model, num_heads, num_encoder_blocks, num_decoder_blocks):
+    def __init__(self, vocab_size, d_model, num_heads, num_encoder_blocks, num_decoder_blocks, dropout=0.1):
         super(Transformer, self).__init__()
-        self.src_embedding = nn.Embedding(vocab_size, d_model)
-        self.tgt_embedding = nn.Embedding(vocab_size, d_model)
+        self.sharedEmbedding = nn.Embedding(vocab_size, d_model)
+        
         self.d_model = d_model
         self.num_heads = num_heads
         
         self.encoder_blocks = nn.ModuleList([
-            EncoderBlock(d_model, num_heads) for _ in range(num_encoder_blocks)])
+            EncoderBlock(d_model, num_heads, dropout=dropout) for _ in range(num_encoder_blocks)])
         self.decoder_blocks = nn.ModuleList([
-            DecoderBlock(d_model, num_heads) for _ in range(num_decoder_blocks)])
+            DecoderBlock(d_model, num_heads, dropout=dropout) for _ in range(num_decoder_blocks)])
         
         self.softmax = Softmax(dim=-1)
         self.final_linear = nn.Linear(d_model, vocab_size)
         
+        self.dropout = nn.Dropout(dropout)
         
     def positional_encoding(self, seq_len):
         c = 10000
-        i = torch.arange(seq_len).unsqueeze(1)  # (seq_len, 1)
+        pos = torch.arange(seq_len).unsqueeze(1)  # (seq_len, 1)
         
         # 1/ C^{2j/d_model} = exp(-1 *Log(C) * (2j/d_model)) 
-        j = torch.arange(0, self.d_model, 2)  # (d_model/2,)
-        factor = torch.exp(j * -(math.log(10000.0) / self.d_model))  # (d_model/2,)
+        i = torch.arange(0, self.d_model, 2)  # (d_model/2,)
+        factor = torch.exp(i * -(math.log(10000.0) / self.d_model))  # (d_model/2,)
         
-        P = torch.zeros(seq_len, self.d_model)
-        P[:, 0::2] = torch.sin(i * factor)  
-        P[:, 1::2] = torch.cos(i * factor)  
+        PE = torch.zeros(seq_len, self.d_model)
+        PE[:, 0::2] = torch.sin(pos * factor)  
+        PE[:, 1::2] = torch.cos(pos * factor)  
         
-        return P.unsqueeze(0)  # (1, seq_len, d_model)
-        
+        return PE.unsqueeze(0)  # (1, seq_len, d_model)
         
     def forward(self, src_seq, tgt_seq, src_mask=None, tgt_mask=None):
-        src_seq = self.src_embedding(src_seq) * math.sqrt(self.d_model)
-        tgt_seq = self.tgt_embedding(tgt_seq) * math.sqrt(self.d_model)
+        src_seq = self.sharedEmbedding(src_seq) * math.sqrt(self.d_model)
+        tgt_seq = self.sharedEmbedding(tgt_seq) * math.sqrt(self.d_model)
         
         seq_len_src = src_seq.size(1)
         seq_len_tgt = tgt_seq.size(1)
         
         src_seq += self.positional_encoding(seq_len_src).to(src_seq.device)  
+        src_seq = self.dropout(src_seq)
         tgt_seq += self.positional_encoding(seq_len_tgt).to(tgt_seq.device)  
+        tgt_seq = self.dropout(tgt_seq)
         
         encoder_output = src_seq
         for encoder in self.encoder_blocks:
@@ -188,7 +197,7 @@ class Transformer(nn.Module):
         
         decoder_output = tgt_seq
         for decoder in self.decoder_blocks:
-            decoder_output = decoder(decoder_output, encoder_output, mask=tgt_mask)  
+            decoder_output = decoder(decoder_output, encoder_output, src_mask=src_mask, tgt_mask=tgt_mask)  
         
         return self.final_linear(decoder_output)  # (batch_size, seq_len_tgt, vocab_size)
         
