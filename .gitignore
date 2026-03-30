@@ -1,2 +1,9 @@
 .venv/
 .pth
+.ko
+.en
+.model
+.vocab
+class/transformer_model.pth
+tokenizer/AIhub/tokenizer.model
+tokenizer/AIhub/tokenizer.vocab
