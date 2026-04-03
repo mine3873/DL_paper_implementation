@@ -28,10 +28,10 @@ class ScaledDotProductAttention(nn.Module):
         scores = torch.matmul(Q, torch.transpose(K, -1, -2)) / math.sqrt(d_k)
         
         if mask is not None:
-            scores = scores.masked_fill(mask == 0, -1e9)
+            scores = scores.masked_fill(mask == False, -1e4)
         
         # attention_weights : tensor(Batch, h, seq_len_q, seq_len_k)
-        attention_weights = torch.softmax(scores, dim=-1)
+        attention_weights = torch.softmax(scores.float(), dim=-1).to(Q.dtype)
         
         return torch.matmul(attention_weights, V)
 
@@ -103,9 +103,15 @@ class EncoderBlock(nn.Module):
         
     
     def forward(self, X, mask=None):
-        X = self.normLayer1(X + self.dropOut(self.multiHeadAttention(Q=X, K=X, V=X, mask=mask)))
+        residual = X
+        X = self.normLayer1(X)
+        X = residual + self.dropOut(self.multiHeadAttention(Q=X, K=X, V=X, mask=mask))
         
-        return self.normLayer2(X + self.dropOut(self.feedForward(X=X)))
+        residual = X
+        X = self.normLayer2(X)
+        X = residual + self.dropOut(self.feedForward(X=X))
+        
+        return X
         
 class DecoderBlock(nn.Module):
     def __init__(self, d_model, n_heads, dropout):
@@ -123,21 +129,34 @@ class DecoderBlock(nn.Module):
         self.dropout = torch.nn.Dropout(dropout)
         
     def forward(self, X, encoder_output, src_mask=None, tgt_mask=None):
-        attention_output = self.self_masked_attention(Q=X, K=X, V=X, mask=tgt_mask)
-        X = self.normLayer1(X + self.dropout(attention_output))
+        residual = X
+        X = self.normLayer1(X)
+        X = residual + self.dropout(self.self_masked_attention(Q=X, K=X, V=X, mask=tgt_mask))
         
-        attention_output = self.encoder_decoder_attention(Q=X, K=encoder_output, V=encoder_output, mask=src_mask)
-        X = self.normLayer2(X + self.dropout(attention_output))
+        residual = X
+        X = self.normLayer2(X)
+        X = residual + self.dropout(self.encoder_decoder_attention(Q=X, K=encoder_output, V=encoder_output, mask=src_mask))
         
-        ff_output = self.feedForward(X=X)
-        output = self.normLayer3(X + self.dropout(ff_output))
+        residual = X
+        X = self.normLayer3(X)
+        X = residual + self.dropout(self.feedForward(X=X))
         
-        return output
+        return X
 
 class PositionalEncoding(nn.Module):
-    def __init__(self,  d_model):
+    def __init__(self,  d_model, max_len=5000):
         super(PositionalEncoding, self).__init__()
         self.d_model = d_model
+        
+        C = 10000.0
+        self.pe = torch.zeros(max_len, d_model)
+        pos = torch.arange(0, max_len, dtype=torch.float).unsqueeze(1)
+        factor = torch.exp(torch.arange(0, d_model, 2).float() * (-math.log(C) / d_model))
+        
+        self.pe[:, 0::2] = torch.sin(pos * factor)
+        self.pe[:, 1::2] = torch.cos(pos * factor)
+        
+        self.register_buffer('pe_buffer', self.pe.unsqueeze(0))
         
     def forward(self, seq_len):
         """
@@ -147,18 +166,7 @@ class PositionalEncoding(nn.Module):
         - return:
         tensor(Batch, seq_len, d_model)
         """
-        C = 10000.0
-        pos = torch.arange(seq_len).unsqueeze(1)
-        i = torch.arange(0, self.d_model, 2)
-        
-        # factor : exp(-2i * ln(C) / d_model)
-        factor = torch.exp(i * -math.log(C) / self.d_model)
-        
-        PE = torch.zeros(seq_len, self.d_model)
-        PE[:, 0::2] = torch.sin(pos * factor)
-        PE[:, 1::2] = torch.cos(pos * factor)
-        
-        return PE.unsqueeze(0)
+        return self.pe_buffer[:, :seq_len, :]
         
 class Transformer_scatch(nn.Module):
     def __init__(self, vocab_size, d_model, n_layer, n_heads, dropout=0.1):
@@ -168,6 +176,8 @@ class Transformer_scatch(nn.Module):
         self.dropout = dropout
         
         self.embedding = torch.nn.Embedding(self.vocab_size, d_model)
+        
+        self.dropOut = torch.nn.Dropout(dropout)
         
         self.pos_encoding1 = PositionalEncoding(self.d_model)
         self.pos_encoding2 = PositionalEncoding(self.d_model)
@@ -179,6 +189,7 @@ class Transformer_scatch(nn.Module):
             DecoderBlock(d_model=self.d_model, n_heads=n_heads, dropout=self.dropout) for _ in range(n_layer)
         ])
         
+        self.output_nrom = torch.nn.LayerNorm(d_model)
         self.linear = torch.nn.Linear(self.d_model, self.vocab_size)
         
         
@@ -200,8 +211,8 @@ class Transformer_scatch(nn.Module):
         src_seq_len = src.size(1)
         tgt_seq_len = tgt.size(1)
         
-        src_emb = src_emb + self.pos_encoding1(src_seq_len).to(src_emb.device)
-        tgt_emb = tgt_emb + self.pos_encoding2(tgt_seq_len).to(tgt_emb.device)
+        src_emb = self.dropOut(src_emb + self.pos_encoding1(src_seq_len).to(src_emb.device))
+        tgt_emb = self.dropOut(tgt_emb + self.pos_encoding2(tgt_seq_len).to(tgt_emb.device))
         
         encoder_output = src_emb
         for encoder in self.encoders:
@@ -211,7 +222,7 @@ class Transformer_scatch(nn.Module):
         for decoder in self.decoders:
             decoder_output = decoder(X=decoder_output, encoder_output=encoder_output, src_mask=src_mask, tgt_mask=tgt_mask)
             
-        output = self.linear(decoder_output)
+        output = self.linear(self.output_nrom(decoder_output))
         
         return output
     

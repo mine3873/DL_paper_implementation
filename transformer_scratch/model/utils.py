@@ -3,25 +3,29 @@ import torch
 import os
 import sentencepiece as spm
 
-def get_lr_lambda(d_model, warmup_steps):
+def get_lr_lambda(d_model, warmup_steps, factor=0.5):
     """
     - return:
     lrate = (d_model ** -0.5) * min(step_num**-0.5, step_num * (warmup_steps ** -1.5))
     """
-    return lambda step: (d_model ** -0.5) * min(
+    return lambda step: factor * (d_model ** -0.5) * min(
         max(1, step) ** -0.5, 
         max(1, step) * (warmup_steps ** -1.5)
     )
     
-    
-def get_collate_fn(pad_idx):
-    """
-    add <pad> to sentences, except the longest sentence.
-    
-    - return:
-    tensor (Batch, seq_len)
-    """
-    def collate_fn(batch):
+
+class TransformerCollate:
+    def __init__(self, pad_idx):
+        self.pad_idx = pad_idx
+        
+    def __call__(self, batch):
+        """
+        add <pad> to sentences, except the longest sentence.
+        
+        - return:
+        tensor (Batch, seq_len)
+        """
+        
         src_batch = []
         tgt_batch = []
         
@@ -32,12 +36,12 @@ def get_collate_fn(pad_idx):
             src_batch.append(src_item)
             tgt_batch.append(tgt_item)
 
-        src_padded = pad_sequence(src_batch, batch_first=True, padding_value=pad_idx)
-        tgt_padded = pad_sequence(tgt_batch, batch_first=True, padding_value=pad_idx)
+        src_padded = pad_sequence(src_batch, batch_first=True, padding_value=self.pad_idx)
+        tgt_padded = pad_sequence(tgt_batch, batch_first=True, padding_value=self.pad_idx)
 
-        return src_padded, tgt_padded
         
-    return collate_fn
+            
+        return src_padded, tgt_padded
 
 def create_masks(src, tgt, pad_idx, device):
     """
@@ -45,14 +49,18 @@ def create_masks(src, tgt, pad_idx, device):
     tgt_mask: tensor(Batch, 1, seq_len_tgt, seq_len_tgt)
     """
     src_mask = (src != pad_idx).unsqueeze(1).unsqueeze(2)
-    tgt_mask = (tgt != pad_idx).unsqueeze(1).unsqueeze(2)
     
-    #lower-trianglar 
-    tgt_len = tgt.size(1)
-    lt_mask = torch.tril(torch.ones((tgt_len, tgt_len), device=device)).bool()
-    
-    tgt_mask = tgt_mask & lt_mask
-    
+    if tgt is not None:
+        tgt_mask = (tgt != pad_idx).unsqueeze(1).unsqueeze(2)
+        
+        #lower-trianglar 
+        tgt_len = tgt.size(1)
+        lt_mask = torch.tril(torch.ones((tgt_len, tgt_len), device=device)).bool()
+        lt_mask = lt_mask.unsqueeze(0).unsqueeze(0)
+        
+        tgt_mask = tgt_mask & lt_mask
+    else:
+        tgt_mask = None
     return src_mask, tgt_mask
 
 def load_data(file_path, prefix):

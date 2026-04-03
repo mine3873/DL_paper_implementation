@@ -13,6 +13,7 @@ class TransformerConfig:
     
     # train parameters
     batch_size: int = 32
+    batch_size_val: int = 32
     epochs: int = 32
     warmup_steps: int = 4000
     beta1: int = 0.9
