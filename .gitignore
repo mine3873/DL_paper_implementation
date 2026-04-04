@@ -4,8 +4,10 @@
 .en
 .model
 .vocab
-__pycache/
+__pycache__/
 transformer_scratch/outputs/transformer_model_best.pth
 transformer_scratch/tokenizer/AIhub/
 transformer_scratch/tokenizer/Multi30k/
 MLP_scartch/outputs/mlp_model_best.pth
+
+
