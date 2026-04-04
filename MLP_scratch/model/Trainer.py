@@ -137,7 +137,7 @@ class MLPTrainer:
                 
         plt.tight_layout()
         
-        plt.savefig(f"test_result_{self.config.batch_size_train}_ep{self.config.epochs}.png")
+        plt.savefig(f"test_result_bs{self.config.batch_size_train}_ep{self.config.epochs}.png")
         plt.show()
                     
             
