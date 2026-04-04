@@ -85,12 +85,18 @@ def train(model, tokenizer, config):
         collate_fn=collate_fn
         )
 
+    # AdamW
+    # m_t = beta1 * m_{t-1} + (1-beta1) * g_t
+    # s_t = beta2 * s_{t-1} + (1-beta2) * (g_T ** 2)
+    # m_t = m_t / (1 - (beta1 ** t))
+    # s_t = s_t / (1 - (beta2 ** t))
+    # theta_{t+1} = theta_t - lr * (m_t / (math.sqrt(s_t) + epsilon) + lambda * theta_t)
     optimizer = torch.optim.AdamW(
         params=model.parameters(),
         lr = 1.0,
         betas=(config.beta1, config.beta2),
         eps=config.epsilon,
-        weight_decay=1e-2
+        weight_decay=1e-2 #lambda
         )
 
     scheduler = torch.optim.lr_scheduler.LambdaLR(
@@ -152,7 +158,7 @@ def save_plot_history(history, config):
 
 
 def test(model, tokenizer, config):
-    model.load_state_dict(torch.load("transformer_model_best.pth", weights_only=True))
+    model.load_state_dict(torch.load("outputs/transformer_model_best.pth", weights_only=True))
     
     trainer = TransformerTrainer(model=model, config=config)
     
@@ -166,6 +172,25 @@ def test(model, tokenizer, config):
         
         print(f"original : {input_text}")
         print(f"result   : {result}\n")
+
+"""
+def bleu_test(model, tokenizer, config):
+    val_data = TranslationDataSet(
+        data=load_data(data_file_path, 'val'),
+        tokenizer=tokenizer
+    )
+    collate_fn = TransformerCollate(pad_idx=config.pad_idx)
+    
+    val_loader = DataLoader(
+        val_data,
+        batch_size=config.batch_size_val,
+        collate_fn=collate_fn
+        )
+    
+    trainer = TransformerTrainer(model=model, config=config)
+    
+    bleu_score = trainer.evaluate_bleu(val_loader, tokenizer)
+"""
         
         
 if __name__ == "__main__":
@@ -173,3 +198,4 @@ if __name__ == "__main__":
     
     #train(model, tokenizer, config)
     test(model, tokenizer, config)
+    #bleu_test(model, tokenizer, config)

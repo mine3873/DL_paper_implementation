@@ -1,6 +1,8 @@
 import time
-from transformer_scratch.model.utils import create_masks
+from model.utils import create_masks
 import torch
+import sacrebleu
+from tqdm import tqdm
 
 class TransformerTrainer:
     def __init__(self, model, config, train_loader=None, val_loader=None, optimizer=None, scheduler=None, criterion=None):
@@ -149,7 +151,7 @@ class TransformerTrainer:
         
         return total_val_loss / len(self.val_loader)
     
-    def translate(self, sentence, tokenizer, max_len=50, beam_size = 5):
+    def translate(self, sentence, tokenizer, max_len=50, beam_size = 4):
         self.model.eval()
         
         src_tokens = [tokenizer.bos_id()] + tokenizer.encode_as_ids(sentence) + [tokenizer.eos_id()]
@@ -183,15 +185,15 @@ class TransformerTrainer:
         return tokenizer.decode_ids(outputs)
         """
         # Beam search
-        beams = [([tokenizer.bos_id()], 0.0)]
-        completed_beas = []
+        beams = [([tokenizer.bos_id()], 0.0)] # (current sentence, log probability)
+        completed_beams = []
         
         for i in range(max_len):
             candidate = []
             
             for tokens, score in beams:
                 if tokens[-1] == tokenizer.eos_id():
-                    completed_beas.append((tokens, score))
+                    completed_beams.append((tokens, score))
                     continue
                 
                 tgt_tensor = torch.LongTensor(tokens).unsqueeze(0).to(self.config.device)
@@ -205,15 +207,17 @@ class TransformerTrainer:
                 
                 with torch.no_grad():
                     output = self.model(src_tensor, tgt_tensor, src_mask, tgt_mask)
-                    log_probs = torch.log_softmax(output[0, -1, :], dim=-1)
+                    log_probs = torch.log_softmax(output[0, -1, :], dim=-1) # make probability to caculate with addition operation
                     
+                    # avoid repeated words 
                     if len(tokens) >= 1:
                         last_token = tokens[-1]
-                        
+                         
                         for m in range(len(tokens) - 1):
                             if tokens[m] == last_token:
                                 repeated_token = tokens[m+1]
                                 log_probs[repeated_token] = -float('inf')
+                    
                     
                     topK_log_probs, topK_indices = log_probs.topk(beam_size)
                     
@@ -227,9 +231,45 @@ class TransformerTrainer:
             if not beams:
                 break
         
-        all_candidate = completed_beas + beams
-        best_beam = max(all_candidate, key=lambda x: x[1] / (len(x[0])**0.7))
+        all_candidate = completed_beams + beams
+        
+        def get_gnmt_score(candidate):
+            tokens, log_prob_sum = candidate
+            length = len(tokens)
+            n0, alpha = 5, 0.6
+            lp = ((n0 + length)**alpha) / ((n0 + 1)**alpha)
+            return log_prob_sum / lp
+        
+        best_beam = max(all_candidate, key=get_gnmt_score)
         
         
         return tokenizer.decode_ids(best_beam[0])
+    
+    def evaluate_bleu(self, test_dataloader, tokenizer):
+        self.model.eval()
+        hypotheses = []
+        references = []
         
+        for batch in tqdm(test_dataloader, desc="Calculating BELU"):
+            src, tgt = batch
+            
+            for i in range(src.size(0)):
+                src_ids = src[i].tolist()
+                src_text = tokenizer.decode_ids([idx for idx in src_ids if idx not in [self.config.pad_idx, tokenizer.bos_id(), tokenizer.eos_id()]])
+
+                predict_text = self.translate(src_text, tokenizer)
+                hypotheses.append(predict_text)
+                
+                tgt_ids = tgt[i].tolist()
+                ref_text = tokenizer.decode_ids([idx for idx in tgt_ids if idx not in [self.config.pad_idx, tokenizer.bos_id(), tokenizer.eos_id()]])
+                references.append(ref_text)
+                
+        bleu = sacrebleu.corpus_bleu(hypotheses, [references])
+        
+        print("\n" + "-"*20)
+        print(f"BLEU score:      {bleu.score:.2f}")
+        print(f"Brevity penalty: {bleu.bp:.4f}")
+        print(f"Precisions:      {bleu.precisions}")
+        print("-"*20)
+        
+        return bleu.score
