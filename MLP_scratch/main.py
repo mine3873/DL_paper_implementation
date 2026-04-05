@@ -1,8 +1,8 @@
 from model.config import MLPConfig
 from model.Trainer import MLPTrainer
-from model.Scheduler import CosineAnnealing
-from model.Optimizer import AdamW
-from model.criterion import CrossEntropy
+from util_functions.Scheduler import CosineAnnealing
+from util_functions.Optimizer import AdamW
+from util_functions.criterion import CrossEntropy
 from model.MultiPerceptronLayer import MLP
 import torch
 from torchvision import datasets, transforms
@@ -142,5 +142,5 @@ def test(config, model, test_loader):
 
 if __name__ == "__main__":
     config, model, train_loader, val_loader, test_loader = setUp()
-    #train(config, model, train_loader, val_loader)
+    train(config, model, train_loader, val_loader)
     #test(config, model, test_loader)
