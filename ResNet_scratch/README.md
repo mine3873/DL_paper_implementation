@@ -6,10 +6,16 @@
 
 ![n_layer_output](outputs/loss_bs32_ep46_n3.png)
 
+![n_layer_test](outputs/test_bs32_ep46_n3.png)
+
 ### n = 5
 
 ![n_layer_output](outputs/loss_bs32_ep46_n5.png)
 
+![n_layer_test](outputs/test_bs32_ep46_n5.png)
+
 ### n = 7
 
 ![n_layer_output](outputs/loss_bs32_ep46_n7.png)
+
+![n_layer_test](outputs/test_bs32_ep46_n7.png)

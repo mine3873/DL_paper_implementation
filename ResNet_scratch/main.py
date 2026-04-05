@@ -2,9 +2,9 @@ import torch
 import torchvision
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader, Subset
-from ResNet_scratch.model.ResNetConfig import ResNetConfig
-from ResNet_scratch.model.ResNet import ResNet
-from ResNet_scratch.model.trainer import ResNetTrainer
+from model.ResNetConfig import ResNetConfig
+from model.ResNet import ResNet
+from model.trainer import ResNetTrainer
 import matplotlib.pyplot as plt
 import numpy as np
 import json
@@ -16,7 +16,7 @@ import json
 BATCH_SIZE_TRAIN = 32
 BATCH_SIZE_VAL = 16
 NUM_WORKERS = 2
-NUM_LAYERS = 7
+NUM_LAYERS = 5
 EPOCHS = 46
 MONENTUM = 0.9
 WEIGHT_DECAY = 0.0001
@@ -134,6 +134,7 @@ def train(config, model, train_loader, val_loader):
         model=model,
         train_loader=train_loader,
         val_loader=val_loader,
+        test_loader=test_loader,
         optimizer=optimizer,
         criterion=criterion,
         scheduler=scheduler,
@@ -179,7 +180,25 @@ def save_plot_history(history, config):
     plt.savefig(f"loss_bs{config.batch_size_train}_ep{config.epochs}_n{config.num_layers}.png")
     plt.show()
 
+def test(config, model, test_loader):
+    n_layers = [3, 5, 7]
+    for n in n_layers:
+        config.num_layers = n
+        
+        model = ResNet(
+            num_layers=config.num_layers,
+            config=config
+        )
+        model = model.to(config.device)
+        
+        model.load_state_dict(torch.load(f"ResNet_scratch/outputs/ResNet_model_best_n{n}.pth", weights_only=True))
 
+        trainer = ResNetTrainer(model=model, config=config, test_loader=test_loader)
+    
+        trainer.test(num_images=20)
+    
+    
+    
 
 if __name__ == "__main__":
     config, model, train_loader, val_loader, test_loader = setup()
@@ -189,7 +208,7 @@ if __name__ == "__main__":
     C : Channels
     H, W: Height, Weight
     """
-    train(config, model, train_loader, val_loader)
-    
+    #train(config, model, train_loader, val_loader)
+    test(config, model, test_loader)
     
     

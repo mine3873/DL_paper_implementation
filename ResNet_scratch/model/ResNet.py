@@ -105,3 +105,4 @@ class ResNet(nn.Module):
         # (batch_size, num_classes)
         
         return out
+    
