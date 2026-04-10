@@ -16,7 +16,7 @@ import json
 BATCH_SIZE_TRAIN = 32
 BATCH_SIZE_VAL = 16
 NUM_WORKERS = 2
-NUM_LAYERS = 5
+NUM_LAYERS = 7
 EPOCHS = 46
 MONENTUM = 0.9
 WEIGHT_DECAY = 0.0001
@@ -25,6 +25,8 @@ GAMMA = 0.1
 MEAN = (0.4914, 0.4822, 0.4465)
 STD = (0.2023, 0.1994, 0.2010)
 CLASSES = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
+
+DATA_PATH = 'ResNet_scratch/data'
 # ==================================
 
 
@@ -69,13 +71,13 @@ def setup():
     ])
     
     train_dataset = torchvision.datasets.CIFAR10(
-        root='.', train=True, download=True, transform=train_transform
+        root=DATA_PATH, train=True, download=True, transform=train_transform
     )
     val_dataset = torchvision.datasets.CIFAR10(
-        root='.', train=True, download=True, transform=test_transform
+        root=DATA_PATH, train=True, download=True, transform=test_transform
         )
     test_dataset = torchvision.datasets.CIFAR10(
-        root='.', train=False, download=True, transform=test_transform
+        root=DATA_PATH, train=False, download=True, transform=test_transform
     )
     
     indices = np.arange(50000)
@@ -88,7 +90,7 @@ def setup():
     
     train_loader = DataLoader(train_dataset, batch_size=config.batch_size_train, shuffle=True, num_workers=NUM_WORKERS)
     val_loader = DataLoader(val_dataset, batch_size=config.batch_size_val, shuffle=False, num_workers=NUM_WORKERS)
-    test_loader = DataLoader(test_dataset, batch_size=config.batch_size_val, shuffle=False, num_workers=NUM_WORKERS)
+    test_loader = DataLoader(test_dataset, batch_size=config.batch_size_val, shuffle=True, num_workers=NUM_WORKERS)
     
     model = ResNet(
         num_layers=config.num_layers,
@@ -180,6 +182,53 @@ def save_plot_history(history, config):
     plt.savefig(f"loss_bs{config.batch_size_train}_ep{config.epochs}_n{config.num_layers}.png")
     plt.show()
 
+def visualize_feature_maps(model, config, test_loader):
+    model.load_state_dict(torch.load(f"ResNet_scratch/outputs/ResNet_model_best_n{7}.pth", weights_only=True))
+    
+    model.eval()
+    
+    images, labels = next(iter(test_loader))
+    img = images[0].unsqueeze(0).to(config.device)
+    
+    origin_img = images[0].permute(1, 2, 0).cpu().numpy()
+    origin_img = origin_img * np.array(config.std) + np.array(config.mean)
+    origin_img = origin_img.clip(0, 1)
+    
+    feature_maps = []
+    def hook_fn(module, input, output):
+        feature_maps.append(output)
+        
+    target_layer = model.conv1
+    handle = target_layer.register_forward_hook(hook_fn)
+    
+    with torch.no_grad():
+        _ = model(img)
+        
+    handle.remove()
+    
+    features = feature_maps[0][0].cpu()
+    
+    fig, axes = plt.subplots(figsize=(14,10))
+    plt.suptitle(f"Feature maps of {target_layer.__class__.__name__}", fontsize=16)
+    
+    ax_origin = plt.subplot2grid((4, 5), (0, 0), rowspan=4)
+    ax_origin.imshow(origin_img)
+    ax_origin.set_title("original image", fontsize=12)
+    ax_origin.axis('off')
+
+    for i in range(16):
+        row = i // 4
+        col = i % 4 + 1
+        
+        ax = plt.subplot2grid((4, 5), (row, col))
+        ax.imshow(features[i], cmap='magma') 
+        ax.axis('off')
+        ax.set_title(f'Ch {i}', fontsize=10)
+    
+    plt.tight_layout()
+    plt.show()
+    
+
 def test(config, model, test_loader):
     n_layers = [3, 5, 7]
     for n in n_layers:
@@ -196,7 +245,7 @@ def test(config, model, test_loader):
         trainer = ResNetTrainer(model=model, config=config, test_loader=test_loader)
     
         trainer.test(num_images=20)
-    
+
     
     
 
@@ -209,6 +258,6 @@ if __name__ == "__main__":
     H, W: Height, Weight
     """
     #train(config, model, train_loader, val_loader)
-    test(config, model, test_loader)
-    
+    #test(config, model, test_loader)
+    visualize_feature_maps(model, config, test_loader)
     

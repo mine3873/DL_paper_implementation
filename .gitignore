@@ -9,6 +9,7 @@ __pycache__/
 transformer_scratch/tokenizer/AIhub/
 transformer_scratch/tokenizer/Multi30k/
 YOLO_scratch/data/VOCdevkit/
+UNet/data/ISBI_2012
 
 
 
