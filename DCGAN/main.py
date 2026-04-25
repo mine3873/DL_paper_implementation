@@ -2,8 +2,8 @@ import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 import torch
 from torch.utils.data import DataLoader
-from DCGAN_scrath import Generator, Discriminator, weights_init
-from DCGANConfig import DCGANConfig
+from models.DCGAN_scrath import Generator, Discriminator, weights_init
+from models.DCGANConfig import DCGANConfig
 from trainer import DCGANTrainer
 import matplotlib.pyplot as plt
 import json
