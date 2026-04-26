@@ -1,10 +1,12 @@
 import torch
 import torchvision
 import time
+import matplotlib.pyplot as plt
+import numpy as np
 
 class DCGANTrainer:
     def __init__(self, models, config, train_laoder=None, criterion=None, optimizers=None, schedulers=None, fixed_noise=None):
-        self.modelS = models
+        self.models = models
         self.config = config
         self.train_loader = train_laoder
         self.criterion = criterion
@@ -20,7 +22,7 @@ class DCGANTrainer:
         }
         
     def train(self):
-        G, D = self.modelS
+        G, D = self.models
         optD, optG = self.optimizers
         scheD, scheG = self.schedulers
         device = self.config.device
@@ -111,5 +113,37 @@ class DCGANTrainer:
                     'optimizerG_state_dict': optG.state_dict(),
                     'optimizerD_state_dict': optD.state_dict(),
                 }, f"DCGAN_epoch_{epoch+1}.pth")
+                
+    def test(self, noise_start, noise_end=None, steps=10, image_name=None):
+        G, _ = self.models
+        G.eval()
         
+        with torch.no_grad():
+            if noise_end is not None:
+                alpha = torch.linspace(0, 1, steps, device=self.config.device)
+                alpha = alpha.view(steps, 1, 1, 1)
+                
+                interpolated_noise = (1 - alpha) * noise_start + alpha * noise_end
+                fake_samples = G(interpolated_noise).detach().cpu()
+            else:
+                fake_samples = G(noise_start).detach().cpu()
+                steps = fake_samples.size(0)
+            
+            plt.figure(figsize=(steps * 2, 2))
+            for i in range(steps):
+                plt.subplot(1, steps, i + 1)
+                
+                img = fake_samples[i].permute(1, 2, 0).numpy()
+                img = (img + 1) / 2
+                img = np.clip(img, 0, 1)
+                
+                plt.imshow(img)
+                plt.axis('off')
+                if noise_end is not None:
+                    plt.title(f"{int((i / (steps - 1.0)) * 100)}%")
+            
+            plt.tight_layout()
+            
+            plt.savefig(f"test_{image_name}")
+            plt.show()
         

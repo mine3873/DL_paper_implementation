@@ -4,7 +4,7 @@ import torch
 from torch.utils.data import DataLoader
 from models.DCGAN_scrath import Generator, Discriminator, weights_init
 from models.DCGANConfig import DCGANConfig
-from trainer import DCGANTrainer
+from models.trainer import DCGANTrainer
 import matplotlib.pyplot as plt
 import json
 
@@ -20,7 +20,7 @@ BETA1 = 0.5
 BETA2 = 0.999
 WEIGHT_DECAY = 0.01
 
-DATA_ROOT_PATH = 'UNet/data/ISBI_2012'
+
 # ==================================
 
 
@@ -38,7 +38,7 @@ def setup():
         transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
     ])
     
-    dataset = datasets.ImageFolder(root='./data/celeba', transform=transform)
+    dataset = datasets.ImageFolder(root='./DCGAN/data/celeba', transform=transform)
     
     train_loader = DataLoader(dataset, batch_size=config.batch_size_train, shuffle=True, num_workers=4, pin_memory=True)
     fixed_noise = torch.randn(64, 100, 1, 1, device=config.device)
@@ -122,6 +122,34 @@ def save_plot_history(history, config):
     plt.savefig(f"loss.png")
     plt.show()
 
+def test(config, models):
+    G, D = models
+    
+    checkpoint = torch.load("DCGAN/outputs/DCGAN_epoch_20.pth")
+    
+    G.load_state_dict(checkpoint['model_G_state_dict'])
+    D.load_state_dict(checkpoint['model_D_state_dict'])
+    
+    trainer = DCGANTrainer(
+        models=(G, D),
+        config=config,
+        train_laoder=train_loader,
+        fixed_noise=fixed_noise
+    )
+    
+    z_start = torch.randn(1, 100, 1, 1, device=config.device)
+    z_end = torch.randn(1, 100, 1, 1, device=config.device)
+    
+    trainer.test(z_start, z_end, steps=8, image_name="compare_with_changing_z")
+    
+    z_start = torch.randn(1, 100, 1, 1, device=config.device)
+    z_end = z_start.clone()
+    
+    target_idx = 5
+    z_end[0, target_idx, 0, 0] = 3.0
+    trainer.test(z_start, z_end, steps=8, image_name=f"compare_with_{target_idx}_change.png")
+
 if __name__ == "__main__":
     config, train_loader, fixed_noise, models = setup()
-    train(config, train_loader, fixed_noise, models)
+    #train(config, train_loader, fixed_noise, models)
+    test(config, models)
