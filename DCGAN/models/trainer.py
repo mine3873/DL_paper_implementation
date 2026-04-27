@@ -103,9 +103,9 @@ class DCGANTrainer:
                     normalize=True,
                     nrow=8
                     )  
-            if (epoch + 1) % 5 == 0 or (epoch + 1) == self.config.epochs:
-                             
                 
+            if (epoch + 1) % 5 == 0 or (epoch + 1) == self.config.epochs:
+                        
                 torch.save({
                     'epoch': epoch,
                     'model_G_state_dict': G.state_dict(),

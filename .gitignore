@@ -10,6 +10,6 @@ transformer_scratch/tokenizer/AIhub/
 transformer_scratch/tokenizer/Multi30k/
 YOLO_scratch/data/VOCdevkit/
 UNet/data/ISBI_2012
-DCGAN/data/celeba
+VAE/data/celeba
 
 
