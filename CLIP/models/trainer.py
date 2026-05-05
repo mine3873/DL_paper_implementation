@@ -155,7 +155,7 @@ class CLIPTrainer:
                     'epoch': epoch,
                     'model_state_dict': self.model.state_dict(),
                     'optimizer_state_dict': self.optimizer.state_dict(),
-                }, f"CLIP_epoch_best_val.pth")
+                }, f"CLIP_best_val_ResNet{self.config.img_n_layer}.pth")
             else:
                 self.patience_counter += 1
                 

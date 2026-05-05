@@ -5,6 +5,7 @@ import math
 import numpy as np
 import torchvision.models as models
 import clip
+from typing import Literal
 
 class BasicBlock(nn.Module):
     expansion = 1
@@ -81,9 +82,20 @@ class BottleNeckBlock(nn.Module):
         return self.relu(output)
 
 class ResNet(nn.Module):
-    def __init__(self, block, layers, ):
+    def __init__(
+        self, block,
+        n_layer: Literal['50', '34', '18'] = '50' 
+        ):
+        
         super(ResNet, self).__init__()
         self.in_channel = 64
+        
+        if n_layer == '50' or n_layer == '34':
+            layers = (3, 4, 6, 3)
+        elif n_layer == '18':
+            layers = (2, 2, 2, 2)
+        
+        self.n_layer = n_layer
         
         self.conv1 = nn.Conv2d(
             in_channels=3, out_channels=self.in_channel, kernel_size=7,
@@ -123,8 +135,15 @@ class ResNet(nn.Module):
         return nn.Sequential(*layers)
         
     def load_pretrained_resnet(self):
-        pretrained_resnet = models.resnet50(weights='DEFAULT')
-        self.load_state_dict(pretrained_resnet.state_dict(), strict=False) 
+        if self.n_layer == '50':
+            pretrained_resnet = models.resnet50(weights='DEFAULT')
+        elif self.n_layer == '34':
+            pretrained_resnet = models.resnet34(weights='DEFAULT')
+        elif self.n_layer == '18':
+            pretrained_resnet = models.resnet18(weights='DEFAULT')
+            
+        self.load_state_dict(pretrained_resnet.state_dict(), strict=False)    
+        
         
         
     def forward(self, X):
@@ -298,8 +317,6 @@ class Transformer(nn.Module):
 
         self.load_state_dict(new_dict, strict=False)
         
-
-    
     def forward(self, X, eos_idx, pad_idx):
         mask = self.create_masks(X, pad_idx, X.device)
         
@@ -317,15 +334,23 @@ class Transformer(nn.Module):
         return X[torch.arange(X.size(0)), safe_eos_idx]
     
 class CLIPScratch(nn.Module):
-    def __init__(self, config):
+    def __init__(
+        self, config,
+        n_layer: Literal['50', '34', '18'] = '50' 
+        ):
         super(CLIPScratch, self).__init__()
         
-        self.img_encoder = ResNet(config.block, config.layers)
+        self.img_encoder = ResNet(config.block, n_layer)
         self.text_encoder = Transformer(
             config.d_model, config.max_len, config.n_heads, config.dropout, config.n_layers, config.vocab_size
             )
         
-        self.Wi = nn.Linear(config.img_enc_out_dim, config.d_e)
+        if n_layer == '50':
+            img_enc_out_dim = 2048
+        elif n_layer == '34' or n_layer == '18':
+            img_enc_out_dim = 512
+        
+        self.Wi = nn.Linear(img_enc_out_dim, config.d_e)
         self.Wt = nn.Linear(config.text_enc_out_dim, config.d_e)
         
         self.t = nn.Parameter(torch.ones([]) * np.log(1 / 0.07))
@@ -356,8 +381,6 @@ class CLIPScratch(nn.Module):
         
         self.text_encoder.load_pretrained_transformer()
         
-        
-    
     def forward(self, X, eos_idx, pad_idx):
         X_img, X_text = X
         

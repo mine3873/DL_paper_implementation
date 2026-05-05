@@ -6,11 +6,11 @@ from torchvision.models import ResNet50_Weights
 from transformers import get_cosine_schedule_with_warmup
 from transformers import CLIPTokenizer
 from torch.utils.data import DataLoader, Subset
-from CLIPConfig import CLIPConfig
-from CLIPDataset import CLIPDataset
-from CLIPScratch import CLIPScratch, BasicBlock, BottleNeckBlock
-from CLIPLoss import CLIPLoss
-from trainer import CLIPTrainer
+from models.CLIPConfig import CLIPConfig
+from data.CLIPDataset import CLIPDataset
+from models.CLIPScratch import CLIPScratch, BasicBlock, BottleNeckBlock
+from models.CLIPLoss import CLIPLoss
+from models.trainer import CLIPTrainer
 from typing import Literal
 import random
 
@@ -19,14 +19,12 @@ import random
 # ==================================
 BATCH_SIZE = 96
 BATCH_SIZE_TEST = 64
-EPOCHS = 30
+EPOCHS = 10
 
 PATIENCE = 5
 
 # img encoder 
-LAYERS = (3, 4, 6, 3)
-IMG_ENC_OUT_DIM = 2048
-BLOCK = BottleNeckBlock
+RESNET_N_LAYER = '50'
 
 # text encoder
 MAX_LEN = 77
@@ -93,8 +91,7 @@ def setup():
     config = CLIPConfig(
         batch_size=BATCH_SIZE, batch_size_test=BATCH_SIZE_TEST, epochs=EPOCHS, patience=PATIENCE,
         
-        layers=LAYERS, img_enc_out_dim=IMG_ENC_OUT_DIM,
-        block=BLOCK,
+        img_n_layer=RESNET_N_LAYER, block=(BottleNeckBlock if RESNET_N_LAYER == '50' else BasicBlock),
         
         vocab_size=tokenizer.vocab_size,
         max_len=MAX_LEN, 
@@ -135,7 +132,7 @@ def setup():
     imageNet_val_loader = DataLoader(imageNet_dataset, batch_size=BATCH_SIZE_TEST, shuffle=False, num_workers=4)
     
     
-    model = CLIPScratch(config).to(config.device)
+    model = CLIPScratch(config, n_layer=RESNET_N_LAYER).to(config.device)
     model.load_pretrained_all()
     
     return config, model, train_loader, val_loader, tokenizer, imageNet_val_loader
@@ -220,7 +217,7 @@ def test(
     assert dataset in allowed_datasets 
     assert test_mode in allowed_modes
     
-    checkpoint = torch.load("CLIP_epoch_best_val.pth", map_location=config.device)
+    checkpoint = torch.load(f"CLIP_best_val_ResNet{config.img_n_layer}.pth", map_location=config.device)
     
     model.load_state_dict(checkpoint['model_state_dict'])
     
@@ -262,11 +259,4 @@ if __name__ == "__main__":
     config, model, train_loader, val_loader, tokenizer, imageNet_val_loader = setup()
     
     #train(config, model, train_loader, val_loader, tokenizer)
-    test(
-        config,
-        model,
-        tokenizer,
-        val_loader,
-        dataset='flickr30k_images',
-        test_mode='retrieval'
-        )
+    test(config, model, tokenizer, val_loader, dataset='flickr30k_images',test_mode='zero-shot')

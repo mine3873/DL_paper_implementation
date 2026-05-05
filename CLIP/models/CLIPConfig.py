@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from CLIPScratch import BottleNeckBlock
+from CLIP.models.CLIPScratch import BottleNeckBlock
 import torch
 
 @dataclass
@@ -11,8 +11,7 @@ class CLIPConfig:
     patience: int = 5
     
     # img encoder 
-    layers: tuple = (3, 4, 6, 3)
-    img_enc_out_dim: int = 2048
+    img_n_layer: str = '50'
     block: type = BottleNeckBlock
     
     # text encoder
