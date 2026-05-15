@@ -4,7 +4,7 @@ import torchvision
 import torchvision.transforms as transforms
 from torch.utils.data import DataLoader
 from transformers import get_cosine_schedule_with_warmup
-from model import UNet
+from models import UNet
 from config import DiffusionConfig
 from trainer import DiffusionTrainer
 # ==================================

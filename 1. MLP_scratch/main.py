@@ -1,8 +1,8 @@
 from model.config import MLPConfig
 from model.Trainer import MLPTrainer
-from util_functions.Scheduler import CosineAnnealing
-from util_functions.Optimizer import AdamW
-from util_functions.criterion import CrossEntropy
+from utils.Scheduler import CosineAnnealing
+from utils.Optimizer import AdamW
+from utils.criterion import CrossEntropy
 from model.MultiPerceptronLayer import MLP
 import torch
 from torchvision import datasets, transforms

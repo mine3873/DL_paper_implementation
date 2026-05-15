@@ -1,263 +1,133 @@
+import wandb
 import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader
 import torchvision
+import torchvision.datasets as datasets
 import torchvision.transforms as transforms
-from torch.utils.data import DataLoader, Subset
-from model.ResNetConfig import ResNetConfig
-from model.ResNet import ResNet
-from model.trainer import ResNetTrainer
-import matplotlib.pyplot as plt
-import numpy as np
-import json
+from models.models import Net
+from models.config import ResNetConfig
+from models.trainer import ResnetTrainer
+from utils.utils import initialize_weights
 
 
+DATASET = "cifar10"
+MODEL_NAME = "resnet"
 # ==================================
 # PARAMETERS & PATHS
 # ==================================
-BATCH_SIZE_TRAIN = 32
-BATCH_SIZE_VAL = 16
-NUM_WORKERS = 2
-NUM_LAYERS = 7
-EPOCHS = 46
+BATCH_SIZE_TRAIN = 128
+BATCH_SIZE_VAL = 64
+
+
+NUM_LAYERS = 3
+
+EPOCHS = 60
+
+LR = 0.1
+
 MONENTUM = 0.9
 WEIGHT_DECAY = 0.0001
 GAMMA = 0.1
 
 MEAN = (0.4914, 0.4822, 0.4465)
 STD = (0.2023, 0.1994, 0.2010)
-CLASSES = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 
-DATA_PATH = 'ResNet_scratch/data'
+CLASSES = ('plane', 'car', 'bird', 'cat', 'deer', 'dog', 'frog', 'horse', 'ship', 'truck')
 # ==================================
 
 
 def setup():
     config = ResNetConfig(
-        mean=MEAN,
-        std=STD,
-        classes=CLASSES,
-        batch_size_train=BATCH_SIZE_TRAIN,
-        batch_size_val=BATCH_SIZE_VAL,
-        num_workers=NUM_WORKERS,
-        num_layers=NUM_LAYERS,
-        momentum=MONENTUM,
-        weight_decay=WEIGHT_DECAY,
-        gamma=GAMMA,
-        epochs=EPOCHS,
+        batch_size_train=BATCH_SIZE_TRAIN, batch_size_val=BATCH_SIZE_VAL,
+        epochs=EPOCHS, 
+    )
+    
+    if DATASET == "cifar10":
+        """
+        img : (3, 32, 32)
+        """
         
-    )
-    
-    """
-    in paper:
-     We follow the simple data augmen- tation in [24] for training:
-     4 pixels are padded on each side, 
-     and a 32×32 crop is randomly sampled from the padded image or its horizontal flip.
-     For testing, we only evaluate the single view of the original 32×32 image.
-    """
-    
-    train_transform = transforms.Compose([
-        transforms.RandomHorizontalFlip(),
-        transforms.RandomCrop(32, padding=4),
-        transforms.ToTensor(),
-        transforms.Normalize(
-            config.mean,
-            config.std)
-    ])
-
-    test_transform = transforms.Compose([
-        transforms.ToTensor(),
-        transforms.Normalize(
-            config.mean,
-            config.std)
-    ])
-    
-    train_dataset = torchvision.datasets.CIFAR10(
-        root=DATA_PATH, train=True, download=True, transform=train_transform
-    )
-    val_dataset = torchvision.datasets.CIFAR10(
-        root=DATA_PATH, train=True, download=True, transform=test_transform
+        train_transform = transforms.Compose([
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize(
+                (0.4914, 0.4822, 0.4465),
+                (0.2023, 0.1994, 0.2010))
+        ])
+        
+        val_transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize(
+                (0.4914, 0.4822, 0.4465),
+                (0.2023, 0.1994, 0.2010))
+        ])
+        
+        train_dataset = datasets.CIFAR10(
+            root='./data', train=True, transform=train_transform, download=False
         )
-    test_dataset = torchvision.datasets.CIFAR10(
-        root=DATA_PATH, train=False, download=True, transform=test_transform
-    )
-    
-    indices = np.arange(50000)
-    np.random.shuffle(indices)
-    
-    train_idx, val_idx = indices[:45000], indices[45000:]
-    
-    train_dataset = Subset(train_dataset, train_idx)
-    val_dataset = Subset(val_dataset, val_idx)
-    
-    train_loader = DataLoader(train_dataset, batch_size=config.batch_size_train, shuffle=True, num_workers=NUM_WORKERS)
-    val_loader = DataLoader(val_dataset, batch_size=config.batch_size_val, shuffle=False, num_workers=NUM_WORKERS)
-    test_loader = DataLoader(test_dataset, batch_size=config.batch_size_val, shuffle=True, num_workers=NUM_WORKERS)
-    
-    model = ResNet(
-        num_layers=config.num_layers,
-        config=config
-    )
-    model = model.to(config.device)
-    
-    return config, model, train_loader, val_loader, test_loader
-    
-def train(config, model, train_loader, val_loader):
-    optimizer = torch.optim.SGD(
-        model.parameters(),
-        lr=0.1,
-        momentum=config.momentum,
-        weight_decay=config.weight_decay
-    )
-
-    criterion = torch.nn.CrossEntropyLoss()
-    
-    """
-    in paper: 
-    We start with a learning rate of 0.1, divide it by 10 at 32k and 48k iterations, 
-    and terminate training at 64k iterations, which is determined on a 45k/5k train/val split.
-    ...
-    ...
-    ->
-    num_train_data / batch_size => 45,000 / 32 = 1,406.25 = 1,406
-    
-    step1: 32,000 / 1,406 ~ 22.75
-    step2: 48,000 / 1,406 ~ 34.14
-    terminate: 64,000 / 1,406 ~ 45.51
-    => 
-    milestones = [23, 34]
-    Epochs = 46
-    """
-    scheduler = torch.optim.lr_scheduler.MultiStepLR(
-        optimizer,
-        milestones=[23, 34],
-        gamma=config.gamma
-    )
-    
-    trainer = ResNetTrainer(
-        model=model,
-        train_loader=train_loader,
-        val_loader=val_loader,
-        test_loader=test_loader,
-        optimizer=optimizer,
-        criterion=criterion,
-        scheduler=scheduler,
-        config=config
-    )
-    
-    print(f"start training...")
-    trainer.train()
-    
-    save_plot_history(trainer.history, config)
-    
-def save_plot_history(history, config):
-    with open(f"training_history_n{config.num_layers}.json", "w") as f:
-        model_info = {
-            "config": vars(config),
-            "history": history
-        }
-        json.dump(model_info, f)
-        
-    epochs = range(1, len(history['train_loss']) + 1)
-    
-    plt.figure(figsize=(12, 5))
-    
-    plt.subplot(1, 2, 1)
-    plt.plot(epochs, history['train_loss'], 'b-o', label='Train Loss')
-    plt.plot(epochs, history['val_loss'], 'r-o', label='Val Loss')
-    plt.title(f'Train & Val Loss (BS: {config.batch_size_train} N:{config.num_layers})')
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
-    plt.legend()
-    plt.grid(True)
-    
-    plt.subplot(1, 2, 2)
-    plt.plot(epochs, history['lr'], 'g-s', label='Learning Rate')
-    plt.title(f'Learning Rate (BS: {config.batch_size_train} N:{config.num_layers})')
-    plt.xlabel('Epochs')
-    plt.ylabel('Lr')
-    plt.legend()
-    plt.grid(True)
-    
-    plt.tight_layout()
-    
-    plt.savefig(f"loss_bs{config.batch_size_train}_ep{config.epochs}_n{config.num_layers}.png")
-    plt.show()
-
-def visualize_feature_maps(model, config, test_loader):
-    model.load_state_dict(torch.load(f"ResNet_scratch/outputs/ResNet_model_best_n{7}.pth", weights_only=True))
-    
-    model.eval()
-    
-    images, labels = next(iter(test_loader))
-    img = images[0].unsqueeze(0).to(config.device)
-    
-    origin_img = images[0].permute(1, 2, 0).cpu().numpy()
-    origin_img = origin_img * np.array(config.std) + np.array(config.mean)
-    origin_img = origin_img.clip(0, 1)
-    
-    feature_maps = []
-    def hook_fn(module, input, output):
-        feature_maps.append(output)
-        
-    target_layer = model.conv1
-    handle = target_layer.register_forward_hook(hook_fn)
-    
-    with torch.no_grad():
-        _ = model(img)
-        
-    handle.remove()
-    
-    features = feature_maps[0][0].cpu()
-    
-    fig, axes = plt.subplots(figsize=(14,10))
-    plt.suptitle(f"Feature maps of {target_layer.__class__.__name__}", fontsize=16)
-    
-    ax_origin = plt.subplot2grid((4, 5), (0, 0), rowspan=4)
-    ax_origin.imshow(origin_img)
-    ax_origin.set_title("original image", fontsize=12)
-    ax_origin.axis('off')
-
-    for i in range(16):
-        row = i // 4
-        col = i % 4 + 1
-        
-        ax = plt.subplot2grid((4, 5), (row, col))
-        ax.imshow(features[i], cmap='magma') 
-        ax.axis('off')
-        ax.set_title(f'Ch {i}', fontsize=10)
-    
-    plt.tight_layout()
-    plt.show()
-    
-
-def test(config, model, test_loader):
-    n_layers = [3, 5, 7]
-    for n in n_layers:
-        config.num_layers = n
-        
-        model = ResNet(
-            num_layers=config.num_layers,
-            config=config
+        val_dataset = datasets.CIFAR10(
+            root='./data', train=False, transform=val_transform, download=False
         )
-        model = model.to(config.device)
         
-        model.load_state_dict(torch.load(f"ResNet_scratch/outputs/ResNet_model_best_n{n}.pth", weights_only=True))
-
-        trainer = ResNetTrainer(model=model, config=config, test_loader=test_loader)
+    else:
+        raise NotImplementedError()
+        
     
-        trainer.test(num_images=20)
-
+    train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE_TRAIN, shuffle=True, num_workers=2, pin_memory=True)
+    val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE_VAL)
     
+    
+    return config, train_loader, val_loader
+    
+def train(config, train_loader, val_loader):
+    
+    for n in [3, 9]:
+        for model_name in ['resnet', 'plainnet']:
+            wandb.init(
+                project="ResNet", 
+                name=f"train-{model_name}-n{n}",
+                config=config.__dict__ if hasattr(config, '__dict__') else config,
+                reinit=True
+                )
+            
+            model = Net(
+                layer_num=n, filters=(3, 16, 32, 64),
+                class_n = len(CLASSES), model_name=model_name
+                ).to(config.device)
+            
+            initialize_weights(model, name="kaiming_normal")
+            
+            optimizer = torch.optim.SGD(
+                model.parameters(),
+                lr=LR,
+                momentum=MONENTUM,
+                weight_decay=WEIGHT_DECAY
+            )
+            criterion = nn.CrossEntropyLoss()
+            scheduler = torch.optim.lr_scheduler.MultiStepLR(
+                optimizer,
+                milestones=[30, 45],
+                gamma=GAMMA
+            )
+            
+            trainer = ResnetTrainer(
+                config=config, model=model, model_name=model_name, num_layers=n,
+                train_loader=train_loader, val_loader=val_loader,
+                criterion=criterion, scheduler=scheduler, optimizer=optimizer,
+                log_period=100, wandb_log_period=10
+            )
+            
+            trainer.train()
+    
+            wandb.finish()
     
 
 if __name__ == "__main__":
-    config, model, train_loader, val_loader, test_loader = setup()
+    config, train_loader, val_loader = setup()
     
-    """
-    images: tensor(batch_size, 3, 32, 32) = tensor(batch_size, C, H, W)
-    C : Channels
-    H, W: Height, Weight
-    """
-    #train(config, model, train_loader, val_loader)
-    #test(config, model, test_loader)
-    visualize_feature_maps(model, config, test_loader)
+    train(config, train_loader, val_loader)
+    
+
     
