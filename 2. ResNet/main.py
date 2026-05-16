@@ -2,7 +2,6 @@ import wandb
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
-import torchvision
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
 from models.models import Net

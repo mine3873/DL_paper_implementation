@@ -1,165 +1,126 @@
 import torch
-import time
-import matplotlib.pyplot as plt
+import wandb
+import numpy as np
 import torchvision.transforms.functional as F
 
-class UnetTrainer:
-    def __init__(self, model, config, train_loader=None, val_loader=None, optimizer=None, scheduler=None, criterion=None):
-        self.model = model
+class UNetTrainer:
+    def __init__(
+        self, config, model, 
+        train_loader=None, val_loader=None,
+        criterion=None, optimizer=None, scheduler=None, log_period=5, wandb_log_period=5
+        ):
         self.config = config
+        self.model = model
         self.train_loader = train_loader
         self.val_loader = val_loader
+        self.criterion = criterion
         self.optimizer = optimizer
         self.scheduler = scheduler
-        self.criterion = criterion
         
+        self.log_period = log_period
+        self.wandb_log_period = 5
+        
+        self.global_step = 0
         self.best_val_loss = float('inf')
         
-        self.history = {
-            'train_loss': [],
-            'val_loss': [],
-            'lr': [],
-            'time_per_epoch': []
-        }
-        
     def train(self):
+        device = self.config.device
+        
         for epoch in range(self.config.epochs):
             self.model.train()
             total_train_loss = 0
-            start_t = time.time()
             
-            for i, (inputs, targets, weight_maps) in enumerate(self.train_loader):
-                inputs, targets, weight_maps = inputs.to(self.config.device), targets.to(self.config.device), weight_maps.to(self.config.device)
-                
+            for step, (img, target, w_map) in enumerate(self.train_loader):
                 self.optimizer.zero_grad()
                 
-                model_outputs = self.model(inputs)
+                img, target, w_map = img.to(device), target.to(device), w_map.to(device)
                 
-                loss = self.criterion(model_outputs, targets, weight_maps)
+                model_output = self.model(img)
+                
+                loss = self.criterion(model_output, target, w_map)
                 
                 loss.backward()
-                
-                torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=1.0)
-                
                 self.optimizer.step()
                 self.scheduler.step()
                 
                 total_train_loss += loss.item()
                 
-                if i % 5 == 0:
-                    print(f"Epoch {epoch+1}/{self.config.epochs}, Step {i}/{len(self.train_loader)}, Loss: {loss.item():.4f}, LR: {self.scheduler.get_last_lr()[0]:.6f}")
+                if step % self.log_period == 0:
+                    print(f"Epoch {epoch+1}/{self.config.epochs}, Step {step}/{len(self.train_loader)}, Loss: {loss.item():.4f}, LR: {self.scheduler.get_last_lr()[0]:.6f}")
 
-            
-            time_per_epoch = time.time() - start_t
-            avg_train_loss = total_train_loss / len(self.train_loader)
-            
-            #torch.cuda.empty_cache()
-            
-            val_loss, dice_loss = self.validate()  
-            current_lr = self.optimizer.param_groups[0]['lr']
-            
-            self.history['train_loss'].append(avg_train_loss)
-            self.history['val_loss'].append(val_loss)
-            self.history['lr'].append(current_lr)
-            self.history['time_per_epoch'].append(time_per_epoch)
-            
-            print(f"Epoch [{epoch+1}]/{self.config.epochs}")
-            print(f" - Train Loss: {avg_train_loss:.4f}")
-            print(f" - Val Loss:   {val_loss:.4f}")
-            print(f" - Lr:         {current_lr:.6f}")
-            print(f" - time:       {time_per_epoch} seconds")
-            print("-"*20)
-            
-            if val_loss < self.best_val_loss:
-                self.best_val_loss = val_loss
-                torch.save(self.model.state_dict(), f"UNet_model_data_augm_best.pth")
+                if step % self.wandb_log_period == 0:
+                    wandb.log({
+                        "train/loss": loss.item(),
+                        "train/lr": self.scheduler.get_last_lr()[0],
+                    }, step=self.global_step)
+                    
+                self.global_step += 1
                 
+            
+            avg_train_loss = total_train_loss / len(self.train_loader)
+            avg_val_loss = self.validate()
+            
+            wandb.log({
+                "train/avg_train_loss": avg_train_loss,
+                "train/avg_val_loss": avg_val_loss
+            }, step=self.global_step)
+            
+            if avg_val_loss < self.best_val_loss:
+                self.best_val_loss = avg_val_loss
+                torch.save({
+                    'epoch': epoch,
+                    'model_state_dict': self.model.state_dict(),
+                    'optimizer_state_dict': self.optimizer.state_dict(),
+                    'scheduler_state_dict': self.scheduler.state_dict()
+                }, f"UNet.pth")
+    
     def validate(self):
+        device = self.config.device
         self.model.eval()
         total_val_loss = 0
-        total_dice = 0
+        
+        val_log_list = []
+        
         with torch.no_grad():
-            for inputs, targets, weight_maps in self.val_loader:
-                inputs, targets, weight_maps = inputs.to(self.config.device), targets.to(self.config.device), weight_maps.to(self.config.device)
+            for step, (img, target, w_map) in enumerate(self.val_loader):
+                self.optimizer.zero_grad()
                 
-                model_outputs = self.model(inputs)
+                img, target, w_map = img.to(device), target.to(device), w_map.to(device)
                 
-                loss = self.criterion(model_outputs, targets, weight_maps)
+                model_output = self.model(img)
+                
+                loss = self.criterion(model_output, target, w_map)
                 
                 total_val_loss += loss.item()
                 
-                probs = torch.softmax(model_outputs, dim=1)
-                batch_dice = self.calculate_dice(probs[:, 1], targets)
-                total_dice += batch_dice
-        
-        avg_loss = total_val_loss / len(self.val_loader)
-        avg_dice = total_dice / len(self.val_loader)
-        
-        return avg_loss, avg_dice
-    
-    
-    def test(self, num_images=5):
-        self.model.eval()
-        images_shown = 0
-        total_dice = 0
-        cols = 3
-        rows = num_images
-        
-        plt.figure(figsize=(9, 3 * rows))
-        
-        with torch.no_grad():
-            for i, (inputs, targets, weight_maps) in enumerate(self.val_loader):
-                if i >= num_images: break
-                inputs, targets, weight_maps = inputs.to(self.config.device), targets.to(self.config.device), weight_maps.to(self.config.device)
-                model_outputs = self.model(inputs)
+                if step == 1:
+                    pred_mask = torch.argmax(model_output, dim=1)
+                    cur_size = model_output.size(-1)
+                    
+                    img_c = F.center_crop(img[0], [cur_size, cur_size])
+                    img_c = (img_c * 0.5 + 0.5).clamp(0, 1).cpu().numpy().transpose(1, 2, 0)
+                    img_c = (img_c * 255).astype(np.uint8)
+                    
+                    target_c = F.center_crop(target[0], [cur_size, cur_size]).squeeze().cpu().numpy().astype(np.uint8)
+                    pred_c = pred_mask[0].squeeze().cpu().numpy().astype(np.uint8)
+
+                    overlay_image = wandb.Image(img_c, masks={
+                        "predictions": {"mask_data": pred_c, "class_labels": {1: "cell"}},
+                        "ground_truth": {"mask_data": target_c, "class_labels": {1: "cell"}}
+                    }, caption="Overlay Analysis")
+
+
+                    comparison_images = [
+                        wandb.Image(img_c, caption="Raw Image"),
+                        wandb.Image(target_c * 255, caption="GT Mask (Side)"),
+                        wandb.Image(pred_c * 255, caption="Pred Mask (Side)")
+                    ]
+
+                    val_log_list.append(overlay_image)
+                    val_log_list.extend(comparison_images)
+                    
+        if val_log_list:
+            wandb.log({"val/visuals": val_log_list}, step=self.global_step)
                 
-                probs = torch.softmax(model_outputs, dim=1)
-                prediction = torch.argmax(probs, dim=1).cpu().numpy()
-                
-                batch_dice = self.calculate_dice(probs[:, 1], targets)
-                total_dice += batch_dice
-                
-                input_img = inputs[0, 0]
-                input_img = F.center_crop(input_img, [388, 388])
-                input_img = input_img.cpu().numpy()
-                # 이런게 있었네;;
-                
-                target_img = targets[0]
-                target_img = F.center_crop(target_img, [388, 388])
-                target_img = target_img.cpu().numpy()
-                
-                plt.subplot(rows, cols, i * 3 + 1)
-                plt.imshow(input_img, cmap='gray')
-                plt.title("Input Image")
-                plt.axis('off')
-                
-                plt.subplot(rows, cols, i * 3 + 2)
-                plt.imshow(target_img, cmap='gray')
-                plt.title("Ground Truth")
-                plt.axis('off')
-                
-                plt.subplot(rows, cols, i * 3 + 3)
-                plt.imshow(prediction[0], cmap='gray')
-                plt.title("UNet Prediction")
-                plt.axis('off')
-                
-                images_shown += 1
+        return total_val_loss / len(self.val_loader)
         
-        avg_dice = total_dice / images_shown
-        print(f"avg_dice : {avg_dice:.4f}")
-        
-        plt.tight_layout()
-        plt.savefig(f"test_augm_bs{self.config.batch_size_train}_ep{self.config.epochs}.png")
-        plt.show()
-                
-    def calculate_dice(self, pred, true, threshold=0.5, smooth=1e-6):
-        pred = (pred > threshold).float()
-        true = true.float()
-        
-        if pred.shape != true.shape:
-            true = F.center_crop(true, pred.shape[-2:])
-        
-        inter = (pred * true).sum()
-        
-        dice = (2.0 * inter + smooth) / (pred.sum() + true.sum() + smooth)
-        return dice.item()

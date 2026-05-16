@@ -21,8 +21,6 @@ class ResnetTrainer:
         
         self.global_steps = 0
         self.best_val_loss = float('inf')
-        self.patience_counter = 0
-        self.patience = 3
         
     def train(self):
         device = self.config.device
@@ -67,7 +65,6 @@ class ResnetTrainer:
             
             if avg_val_loss < self.best_val_loss:
                 self.best_val_loss = avg_val_loss
-                self.patience_counter = 0
                 torch.save({
                     'epoch': epoch,
                     'model_state_dict': self.model.state_dict(),
