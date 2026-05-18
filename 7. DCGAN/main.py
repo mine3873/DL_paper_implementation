@@ -1,155 +1,133 @@
+import wandb
+import torch
+import torch.nn as nn
+from torch.utils.data import DataLoader, random_split
 import torchvision.datasets as datasets
 import torchvision.transforms as transforms
-import torch
-from torch.utils.data import DataLoader
-from models.DCGAN_scrath import Generator, Discriminator, weights_init
-from models.DCGANConfig import DCGANConfig
+from utils.utils import initialize_weights
+from models.DCGANutils import LSUNDataset, ModelsUtils
+from transformers import get_cosine_schedule_with_warmup
 from models.trainer import DCGANTrainer
-import matplotlib.pyplot as plt
-import json
 
 # ==================================
 # PARAMETERS & PATHS
 # ==================================
-BATCH_SIZE_TRAIN = 128
+EPOCHS = 40
 
-EPOCHS = 20
+BATCH_SIZE_TRAIN = 512
+BATCH_SIZE_VAL = 32
 
+#optimzier
 LR = 0.0002
 BETA1 = 0.5
 BETA2 = 0.999
-WEIGHT_DECAY = 0.01
 
+#scheduler
+#WARMUP_RATIO = 0.1
 
+D_Z = 100
+
+LEAKYSLOPE = 0.2
+
+LSUN_ROOT_DIR = f"./data/lsun/bedroom/"
+
+device: str = "cuda" if torch.cuda.is_available() else "cpu"
 # ==================================
 
 
-def setup():
-    config = DCGANConfig(
-        batch_size_train=BATCH_SIZE_TRAIN,
-        epochs=EPOCHS,
-        lr=LR, beta1=BETA1, weight_decay=WEIGHT_DECAY,
-    )
+def setup(ds_name: str = "MNIST"):
+    if ds_name == "MNIST":
+        transform = transforms.Compose([
+            transforms.Resize((28,28)),
+            transforms.CenterCrop(28),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5), (0.5)),
+        ])
+        
+        
+        train_dataset = datasets.MNIST(root='./data', train=True, transform=transform, download=True)
+        val_dataset = datasets.MNIST(root='./data', train=False, transform=transform, download=True)
+        
+        train_loader = DataLoader(dataset=train_dataset, batch_size=BATCH_SIZE_TRAIN, shuffle=True, num_workers=2)
+        val_loader = DataLoader(dataset=val_dataset, batch_size=BATCH_SIZE_VAL, shuffle=False)
+        
+        chs = [1,64,128]
+        
+    elif ds_name == "LSUN":
+        transform = transforms.Compose([
+            transforms.Resize((64,64)),
+            transforms.CenterCrop(64),
+            transforms.ToTensor(),
+            transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5)),
+        ])
+        
+        dataset = LSUNDataset(root_dir=LSUN_ROOT_DIR, transform=transform)
+        
+        total_size = len(dataset)
+        train_size = int(0.99 * total_size)
+        val_size = total_size - train_size
+        
+        train_dataset, val_dataset = random_split(dataset=dataset, lengths=[train_size, val_size], generator=torch.Generator().manual_seed(30))
+        
+        train_loader = DataLoader(dataset=train_dataset, batch_size=BATCH_SIZE_TRAIN, shuffle=True, num_workers=8, pin_memory=True)
+        val_loader = DataLoader(dataset=val_dataset, batch_size=BATCH_SIZE_VAL, shuffle=False)
+        
+        chs = [3, 128, 256, 512, 1024]
     
-    transform = transforms.Compose([
-        transforms.Resize(64),
-        transforms.CenterCrop(64),
-        transforms.ToTensor(),
-        transforms.Normalize((0.5, 0.5, 0.5), (0.5, 0.5, 0.5))
-    ])
+    models = ModelsUtils(d_z=D_Z, chs=chs, ds_name=ds_name, leakySlope=LEAKYSLOPE)
+    models.to(device)
     
-    dataset = datasets.ImageFolder(root='./DCGAN/data/celeba', transform=transform)
+    return models, train_loader, val_loader, ds_name
+
+def train(models, train_loader, val_loader, ds_name):
+    wandb.init(
+        project="DCGAN", 
+        name=f"train-DCGAN-ds_{ds_name}",
+        )
     
-    train_loader = DataLoader(dataset, batch_size=config.batch_size_train, shuffle=True, num_workers=4, pin_memory=True)
-    fixed_noise = torch.randn(64, 100, 1, 1, device=config.device)
+    initialize_weights(models.D, name="normal", mean=0, std=0.02)
+    initialize_weights(models.G, name="normal", mean=0, std=0.02)
+    
+    criterion = nn.BCELoss()
+    
+    optimzier_D = torch.optim.AdamW(params=models.D.parameters(), lr=LR, betas=(BETA1, BETA2), weight_decay=0.01)
+    optimzier_G = torch.optim.AdamW(params=models.G.parameters(), lr=LR, betas=(BETA1, BETA2), weight_decay=0.01)
+    
+    total_steps = len(train_loader) * EPOCHS
+    
+    scheduler_D = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimzier_D, T_max=total_steps)
+    scheduler_G = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer=optimzier_G, T_max=total_steps)
     
     
-    model_G = Generator()
-    model_D = Discriminator()
-    
-    model_G.apply(weights_init)
-    model_D.apply(weights_init)
-    
-    model_G.to(config.device)
-    model_D.to(config.device)
-    
-    models = (model_G, model_D)
-    
-    
-    
-    return config, train_loader, fixed_noise, models
-    
-def train(config, train_loader, fixed_noise, models):
-    model_G, model_D = models
-    
-    #criterion = torch.nn.BCELoss()
-    criterion = torch.nn.BCEWithLogitsLoss()
-    
-    optimizer_G = torch.optim.AdamW(model_G.parameters(), lr=config.lr, betas=(config.beta1, config.beta2), weight_decay=config.weight_decay)
-    optimizer_D = torch.optim.AdamW(model_D.parameters(), lr=config.lr, betas=(config.beta1, config.beta2), weight_decay=config.weight_decay)
-    
-    scheduler_G = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_G, T_max=config.epochs)
-    scheduler_D = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer_D, T_max=config.epochs)
-    
-    optimizers = (optimizer_G, optimizer_D)
-    schedulers = (scheduler_G, scheduler_D)
-    
+    num_sampling = 25
     trainer = DCGANTrainer(
-        models=models,
-        config=config,
-        train_laoder=train_loader,
-        criterion=criterion,
-        optimizers=optimizers,
-        schedulers=schedulers,
-        fixed_noise=fixed_noise
+        epochs=EPOCHS, models=models, 
+        train_loader=train_loader, val_loader=val_loader,
+        criterion=criterion, optimizers=(optimzier_D, optimzier_G), schedulers=(scheduler_D, scheduler_G),
+        log_period=50, wandb_log_period=10, device=device, num_sampling=num_sampling, save_model_period=5, fixed_noise=torch.randn(num_sampling, D_Z, device=device)
     )
     
     trainer.train()
     
-    save_plot_history(trainer.history, config)
+    wandb.finish()
     
-def save_plot_history(history, config):
-    with open("training_history.json", "w") as f:
-        model_info = {
-            "config": vars(config),
-            "history": history
-        }
-        json.dump(model_info, f)
-        
-    epochs = range(1, len(history['loss_D']) + 1)
-    
-    plt.figure(figsize=(12, 5))
-    
-    plt.subplot(1, 2, 1)
-    plt.plot(epochs, history['loss_D'], 'b-o', label='Loss_D')
-    plt.plot(epochs, history['loss_G'], 'r-o', label='Loss_G')
-    plt.title(f'D & G Loss')
-    plt.xlabel('Epochs')
-    plt.ylabel('Loss')
-    plt.legend()
-    plt.grid(True)
-    
-    plt.subplot(1, 2, 2)
-    plt.plot(epochs, history['lr'], 'g-s', label='Learning Rate')
-    plt.title(f'Learning Rate')
-    plt.xlabel('Epochs')
-    plt.ylabel('Lr')
-    plt.legend()
-    plt.grid(True)
-    
-    plt.tight_layout()
-    
-    plt.savefig(f"loss.png")
-    plt.show()
+def test(models, ds_name):
+    wandb.init(
+        project="DCGAN", 
+        name=f"test-DCGAN-ds_{ds_name}",
+        )
+    checkpoint = torch.load("DCGAN-epoch40.pth")
 
-def test(config, models):
-    G, D = models
+    models.G.load_state_dict(checkpoint['model_G_state_dict'])
     
-    checkpoint = torch.load("DCGAN/outputs/DCGAN_epoch_20.pth")
+    models.interpolate(steps=10, use_wandb=True)
+    models.interpolate_some_dimension(dim=20)
+    wandb.finish()
     
-    G.load_state_dict(checkpoint['model_G_state_dict'])
-    D.load_state_dict(checkpoint['model_D_state_dict'])
-    
-    trainer = DCGANTrainer(
-        models=(G, D),
-        config=config,
-        train_laoder=train_loader,
-        fixed_noise=fixed_noise
-    )
-    
-    z_start = torch.randn(1, 100, 1, 1, device=config.device)
-    z_end = torch.randn(1, 100, 1, 1, device=config.device)
-    
-    trainer.test(z_start, z_end, steps=8, image_name="compare_with_changing_z")
-    
-    z_start = torch.randn(1, 100, 1, 1, device=config.device)
-    z_end = z_start.clone()
-    
-    target_idx = 5
-    z_end[0, target_idx, 0, 0] = 3.0
-    trainer.test(z_start, z_end, steps=8, image_name=f"compare_with_{target_idx}_change.png")
 
 if __name__ == "__main__":
-    config, train_loader, fixed_noise, models = setup()
-    #train(config, train_loader, fixed_noise, models)
-    test(config, models)
+    models, train_loader, val_loader, ds_name = setup(ds_name="LSUN")
+    
+    #train(models, train_loader, val_loader, ds_name)
+    test(models, ds_name)
+    

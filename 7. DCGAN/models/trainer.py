@@ -1,149 +1,133 @@
+import wandb
 import torch
-import torchvision
-import time
-import matplotlib.pyplot as plt
-import numpy as np
 
 class DCGANTrainer:
-    def __init__(self, models, config, train_laoder=None, criterion=None, optimizers=None, schedulers=None, fixed_noise=None):
+    def __init__(
+        self, epochs, models, 
+        train_loader=None, val_loader=None,
+        criterion=None, optimizers=None, schedulers=None,
+        log_period=5, wandb_log_period=5, device = "cuda",
+        num_sampling=9, save_model_period=5, fixed_noise=None
+        ):
+        
+        self.epochs = epochs
         self.models = models
-        self.config = config
-        self.train_loader = train_laoder
+        self.train_loader = train_loader
+        self.val_loader = val_loader
         self.criterion = criterion
         self.optimizers = optimizers
         self.schedulers = schedulers
+        
+        self.log_period = log_period
+        self.wandb_log_period = wandb_log_period
+        self.global_steps = 0
+        
+        self.device = device
+        
+        self.num_sampling = num_sampling
+        
+        self.save_model_period = save_model_period
         self.fixed_noise = fixed_noise
         
-        self.history = {
-            'loss_D': [],
-            'loss_G': [],
-            'lr': [],
-            'time_per_epoch': []
-        }
-        
     def train(self):
-        G, D = self.models
-        optD, optG = self.optimizers
-        scheD, scheG = self.schedulers
-        device = self.config.device
+        device = self.device
+        D, G = self.models.D, self.models.G
+        opt_D, opt_G = self.optimizers
+        sch_D, sch_G = self.schedulers
         
-        for epoch in range(self.config.epochs):
+        get_loss = self.models.get_loss
+        get_noise = self.models.get_noise
+        
+        for epoch in range(self.epochs):
             D.train()
             G.train()
-            
-            total_loss_D = 0
-            total_loss_G = 0
-            start_t = time.time()
+            total_train_loss_D = 0
+            total_train_loss_G = 0
             
             for i, (img, _) in enumerate(self.train_loader):
-                batch_size = img.size(0)
                 img = img.to(device)
                 
-                label = torch.full((batch_size,), 0.9, device=device)
-                fake_label = torch.full((batch_size,), 0.0, device=device)
+                # maximize log D(x) + log(1 - D(G(z)))
+                opt_D.zero_grad()
                 
-                D.zero_grad()
+                true_label_for_D = torch.full((img.size(0),), 0.9, device=device)
+                output_D_from_data = D(img)
+                loss_D_from_data = get_loss(self.criterion, output_D_from_data, true_label_for_D)
+                loss_D_from_data.backward()
                 
-                output_D = D(img)
-                loss_D = self.criterion(output_D, label)
-                loss_D.backward()
+                z = get_noise(img.size(0)).to(device)
+                G_z_output = G(z)
                 
-                noise = torch.randn(batch_size, 100, 1, 1, device=device)
-                fake_img = G(noise)
+                output_D_from_fake = D(G_z_output.detach())
                 
-                output_D_fake = D(fake_img.detach())
-                loss_D_fake = self.criterion(output_D_fake, fake_label)
-                loss_D_fake.backward()
+                false_label = torch.full((img.size(0),), 0.0, device=device)
+                loss_D_from_fake = get_loss(self.criterion, output_D_from_fake, false_label)
+                loss_D_from_fake.backward()
                 
+                # minimize log(1 - D(G(z)))
+                opt_G.zero_grad()
                 
+                output_D_from_fake_for_G = D(G_z_output)
                 
-                G.zero_grad()
-                
-                output_G = D(fake_img)
-                loss_G = self.criterion(output_G, label)
+                true_label_for_G = torch.full((img.size(0),), 1.0, device=device)
+                loss_G = get_loss(self.criterion, output_D_from_fake_for_G, true_label_for_G)
                 loss_G.backward()
                 
-                optD.step()
-                loss_D = loss_D + loss_D_fake
-                total_loss_D += loss_D.item()
-                optG.step()
-                total_loss_G += loss_G.item()
+                opt_D.step()
+                opt_G.step()
                 
-                if i % 100 == 0:
-                    print(f"Epoch {epoch+1}/{self.config.epochs}, Step {i}/{len(self.train_loader)}, Loss_D: {loss_D.item():.4f}, Loss_G: {loss_G.item():.4f}, LR_D: {scheD.get_last_lr()[0]:.6f}, LR_G: {scheG.get_last_lr()[0]:.6f}")
+                sch_D.step()
+                sch_G.step()
+                
+                loss_D = loss_D_from_fake.item() + loss_D_from_data.item()
+                total_train_loss_D += loss_D
+                total_train_loss_G += loss_G.item()
+                
+                if i % self.log_period == 0:
+                    print(f"Epoch {epoch+1}/{self.epochs}, Step {i}/{len(self.train_loader)}, Loss_D: {loss_D:.4f}, Loss_G: {loss_G.item():.4f}")
                     
+                if i % self.wandb_log_period == 0:
+                    wandb.log({
+                        "train/loss_D": loss_D,
+                        "train/loss_G": loss_G.item(),
+                        "train/lr_D": sch_D.get_last_lr()[0],
+                        "train/lr_G": sch_G.get_last_lr()[0]
+                    }, step=self.global_steps)
                 
-            scheD.step()
-            scheG.step()
+                self.global_steps += 1
             
-            avg_loss_D = total_loss_D / len(self.train_loader)
-            avg_loss_G = total_loss_G / len(self.train_loader)
-            current_lr = optG.param_groups[0]['lr']
-            time_per_epoch = time.time() - start_t
+            avg_train_loss_D = total_train_loss_D / len(self.train_loader)
+            avg_train_loss_G = total_train_loss_G / len(self.train_loader)
             
-            self.history['loss_D'].append(avg_loss_D)
-            self.history['loss_G'].append(avg_loss_G)
-            self.history['lr'].append(current_lr)
-            self.history['time_per_epoch'].append(time_per_epoch)
+            wandb.log({
+                "train/avg_train_loss_D": avg_train_loss_D,
+                "train/avg_train_loss_G": avg_train_loss_G,
+            }, step=self.global_steps)
             
-            print(f"Epoch [{epoch+1}/{self.config.epochs}]")
-            print(f" - Loss_D: {avg_loss_D:.4f}")
-            print(f" - Loss_G: {avg_loss_G:.4f}")
-            print(f" - Lr:     {current_lr:.6f}")
-            print(f" - Time:   {time_per_epoch:.2f} seconds")
-            print("-" * 20)
+            # sampling images with current G 
+            self.models.generate(num_img=self.num_sampling, noise=self.fixed_noise, use_wnadb=True, train=True, step=self.global_steps)
             
-            with torch.no_grad():
-                G.eval()
-                
-                fake_samples = G(self.fixed_noise).detach().cpu()
-                torchvision.utils.save_image(
-                    fake_samples,
-                    f"DCGAN_output_epoch_{epoch+1}.png",
-                    normalize=True,
-                    nrow=8
-                    )  
-                
-            if (epoch + 1) % 5 == 0 or (epoch + 1) == self.config.epochs:
-                        
+            if (epoch % self.save_model_period == 0 or epoch == self.epochs - 1) and epoch > 0:
                 torch.save({
                     'epoch': epoch,
-                    'model_G_state_dict': G.state_dict(),
                     'model_D_state_dict': D.state_dict(),
-                    'optimizerG_state_dict': optG.state_dict(),
-                    'optimizerD_state_dict': optD.state_dict(),
-                }, f"DCGAN_epoch_{epoch+1}.pth")
-                
-    def test(self, noise_start, noise_end=None, steps=10, image_name=None):
-        G, _ = self.models
-        G.eval()
+                    'model_G_state_dict': G.state_dict(),
+                    'optimizer_D_state_dict': opt_D.state_dict(),
+                    'optimizer_G_state_dict': opt_G.state_dict(),
+                    'scheduler_D_state_dict': sch_D.state_dict(),
+                    'scheduler_G_state_dict': sch_G.state_dict()
+                }, f"DCGAN-epoch{epoch + 1}.pth")
+            
+            
+            
+              
+                       
+    
         
-        with torch.no_grad():
-            if noise_end is not None:
-                alpha = torch.linspace(0, 1, steps, device=self.config.device)
-                alpha = alpha.view(steps, 1, 1, 1)
-                
-                interpolated_noise = (1 - alpha) * noise_start + alpha * noise_end
-                fake_samples = G(interpolated_noise).detach().cpu()
-            else:
-                fake_samples = G(noise_start).detach().cpu()
-                steps = fake_samples.size(0)
-            
-            plt.figure(figsize=(steps * 2, 2))
-            for i in range(steps):
-                plt.subplot(1, steps, i + 1)
-                
-                img = fake_samples[i].permute(1, 2, 0).numpy()
-                img = (img + 1) / 2
-                img = np.clip(img, 0, 1)
-                
-                plt.imshow(img)
-                plt.axis('off')
-                if noise_end is not None:
-                    plt.title(f"{int((i / (steps - 1.0)) * 100)}%")
-            
-            plt.tight_layout()
-            
-            plt.savefig(f"test_{image_name}")
-            plt.show()
         
+    
+        
+        
+                    
+
+

@@ -10,4 +10,4 @@ transformer_scratch/tokenizer/AIhub/
 transformer_scratch/tokenizer/Multi30k/
 wandb/
 data/
-
+Others/utils_func/

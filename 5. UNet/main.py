@@ -1,8 +1,6 @@
 import wandb
 import torch
-import torch.nn as nn
 import albumentations as Album
-import numpy as np
 from torch.utils.data import DataLoader
 from model.UNet_utils import ISBIDataset, Loss
 from model.model import UNet
@@ -34,8 +32,6 @@ WEIGHT_DECAY = 0.0001
 DATA_ROOT_DIR = "./data/ISBI-2012"
 IMG_SIZE = 572
 # ==================================
-
-
 
 def setup(ds_name = "em"):
     
