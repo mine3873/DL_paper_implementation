@@ -1,109 +1,93 @@
+import wandb
 import torch
-import torchvision
-import time
 
 class VAETrainer:
-    def __init__(self, model, config, train_laoder=None, criterion=None, optimizer=None, scheduler=None, fixed_noise=None):
-        self.model = model
-        self.config = config
-        self.train_loader = train_laoder
+    def __init__(
+        self, epochs, models, ds_name,
+        train_loader, criterion, optimizer, scheduler, 
+        log_period=10, wandb_log_period=10, save_period=5, fixed_noise=None, num_sampling=25,
+        total_steps=None,
+    ):
+        self.epochs = epochs
+        self.models = models
+        self.train_loader = train_loader
         self.criterion = criterion
         self.optimizer = optimizer
         self.scheduler = scheduler
+        self.log_period = log_period
+        self.wandb_log_period = wandb_log_period
+        self.save_period = save_period
         self.fixed_noise = fixed_noise
+        self.num_sampling = num_sampling
+        self.ds_name = ds_name
+        self.global_steps = 0
+        self.total_steps = total_steps
         
-        self.history = {
-            'loss': [],
-            'lr': [],
-            'time_per_epoch': []
-        }
-
+        
+        self.get_loss = models.get_loss
+        self.generate = models.generate
+        
     def train(self):
-        device = self.config.device
+        device = self.models.device
         
-        test_batch, _ = next(iter(self.train_loader))
-        test_batch = test_batch[:8].to(device)
-        
-        total_steps = len(self.train_loader) * self.config.epochs
-        current_step = 0
-        
-        for epoch in range(self.config.epochs):
-            self.model.train()
-            
-            total_loss = 0
-            start_t = time.time()
+        for epoch in range(self.epochs):
+            self.models.train()
+            total_train_loss = 0
+            total_recon_loss = 0
+            total_kl_loss = 0
             
             for i, (img, _) in enumerate(self.train_loader):
+                self.optimizer.zero_grad()
                 img = img.to(device)
                 
-                self.optimizer.zero_grad()
+                model_outputs, mu, logvar = self.models(img)
                 
-                model_output, mu, logvar = self.model(img)
+                #beta = min(1.0, self.global_steps / anneal_steps)
+                beta=1.0
                 
-                anneal_steps = total_steps // 2
-                beta = min(1.0, current_step / anneal_steps)
-                
-                self.criterion.beta = beta
-                loss = self.criterion(img, model_output, mu, logvar)
+                loss, recon_loss, kl_loss = self.get_loss(self.criterion, model_outputs, img, mu, logvar, beta)
                 
                 loss.backward()
                 
+                torch.nn.utils.clip_grad_norm_(self.models.encoder.parameters(), max_norm=5.0)
+                torch.nn.utils.clip_grad_norm_(self.models.decoder.parameters(), max_norm=5.0)
+                
                 self.optimizer.step()
+                self.scheduler.step()
                 
-                current_step += 1
-                total_loss += loss.item()
+                total_train_loss += loss.item()
+                total_recon_loss += recon_loss.item()
+                total_kl_loss += kl_loss.item()
                 
-                if i % 100 == 0:
-                    print(f"Epoch {epoch+1}/{self.config.epochs}, Step {i}/{len(self.train_loader)}, Loss: {loss.item():.4f}, LR: {self.scheduler.get_last_lr()[0]:.6f}")
-
-            self.scheduler.step()
-            
-            time_per_epoch = time.time() - start_t
-            avg_loss = total_loss / len(self.train_loader)
-            current_lr = self.scheduler.get_last_lr()[0]
-            
-            self.history['loss'].append(avg_loss)
-            self.history['lr'].append(current_lr)
-            self.history['time_per_epoch'].append(time_per_epoch)
-            
-            print(f"Epoch [{epoch+1}/{self.config.epochs}]")
-            print(f" - Loss: {avg_loss:.4f}")
-            print(f" - Lr:     {current_lr:.6f}")
-            print(f" - Time:   {time_per_epoch:.2f} seconds")
-            print("-" * 20)
-            
-            if self.fixed_noise is not None:
-                with torch.no_grad():
-                    self.model.eval()
+                if i % self.log_period == 0 and i > 0:
+                    print(f"Epoch {epoch+1}/{self.epochs}, Step {i}/{len(self.train_loader)}, Loss: {loss.item():.4f}")
                     
-                    fake_samples = self.model.decoder(self.fixed_noise).detach().cpu()
-                    torchvision.utils.save_image(
-                        fake_samples,
-                        f"VAE_output_with_fixed_noise_epoch_{epoch+1}.png",
-                        normalize=True,
-                        nrow=8
-                        )  
-            
-            with torch.no_grad():
-                self.model.eval()
+                if i % self.wandb_log_period == 0 and i > 0:
+                    wandb.log({
+                        "train/loss": loss.item(),
+                        "train/lr": self.scheduler.get_last_lr()[0],
+                        "train/beta": beta
+                    },step=self.global_steps)
                 
-                model_output, _, _ = self.model(test_batch)
-                model_output = model_output.detach().cpu()
-                
-                comparison = torch.cat([test_batch.cpu(), model_output], dim=0)
-                torchvision.utils.save_image(
-                    comparison,
-                    f"VAE_compare_reconstruction_epoch_{epoch+1}.png",
-                    normalize=True,
-                    nrow=8
-                )
+                self.global_steps += 1
+                    
+            self.generate(num_img=self.num_sampling, noise=self.fixed_noise, train=True, step=self.global_steps)
             
-            if (epoch + 1) % 10 == 0 or (epoch + 1) == self.config.epochs:
+            wandb.log({
+                "train/avg_loss": total_train_loss / len(self.train_loader),
+                "train/avg_recon_loss": total_recon_loss / len(self.train_loader),
+                "train/avg_kl_loss": total_kl_loss / len(self.train_loader),
+            },step=self.global_steps)
+            
+            if epoch > 0 and ((epoch + 1) % self.save_period == 0 or (epoch + 1) == self.epochs):
                 torch.save({
                     'epoch': epoch,
-                    'model_state_dict': self.model.state_dict(),
+                    'models_state_dict': self.models.state_dict(),
                     'optimizer_state_dict': self.optimizer.state_dict(),
-                }, f"VAE_epoch_{epoch+1}.pth")
+                    'scheduler_state_dict': self.scheduler.state_dict(),
+                }, f"VAE-{self.ds_name}-epoch{epoch + 1}-d_z{mu.size(1)}.pth")
             
-            
+                    
+                
+                
             

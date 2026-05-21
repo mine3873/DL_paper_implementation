@@ -1,6 +1,5 @@
 import torch.nn as nn
 
-
 def initialize_weights(model, name="kaiming_normal", mean=None, std=None):
     if name == "kaiming_normal":
         for m in model.modules():
@@ -33,3 +32,4 @@ def initialize_weights(model, name="kaiming_normal", mean=None, std=None):
                 nn.init.constant_(m.bias, 0.0)
     else:
         NotImplementedError()
+        
