@@ -1,7 +1,6 @@
 import torch
 import torch.nn as nn
-from modelUtils import MultiHeadAttention, TimeEmbbedding
-
+from models.modelUtils import MultiHeadAttention, TimeEmbbedding
 
 """
 img_size: 64 - 64 - 32  - 16  - 8   - 4

@@ -1,9 +1,9 @@
 import torch
-import torch.nn as nn
 from torch.utils.data import Dataset
 from PIL import Image
 from glob import glob
 import os
+from torchvision.utils import save_image, make_grid
 
 class DiffusionUtils:
     def __init__(self, betas):
@@ -26,7 +26,7 @@ class DiffusionUtils:
         self.posterior_mean_coeff2 = self.sqrt_alphas * self.one_minus_prev_alpha_bars / self.one_minus_alpha_bars
         
         self.posterior_var = (self.one_minus_prev_alpha_bars * betas) / self.one_minus_alpha_bars
-        self.posterior_log_var = torch.log(torch.clamp(self.posterior_variance, min=1e-20))
+        self.posterior_log_var = torch.log(torch.clamp(self.posterior_var, min=1e-20))
         
         self.factor_sqrt_alpha_bars = torch.sqrt(1.0 / self.alpha_bars)
         self.factor_sqrt_alpha_bars_minus_one = torch.sqrt((1.0 / self.alpha_bars) - 1)
@@ -64,10 +64,13 @@ class DiffusionUtils:
                 self._extract(self.factor_sqrt_alpha_bars_minus_one, t, x_t.shape) * noise)    
      
     def p_sample(self, model, x_t, t, t_idx):
+        """
+        x_{t-1} ~ q(x_{t-1}| x_t, x0) ~= p(x_{t-1}|x_t)
+        """
         model_output = model(x_t, t)
         
         x0_recon = self.predict_x0_from_noise(x_t, t, noise=model_output)
-        #x0_recon = torch.clamp(x0_recon, -1.0, 1.0)
+        x0_recon = torch.clamp(x0_recon, -1.0, 1.0)
         
         posterior_mean, _, posterior_log_var = self.q_posterior(x_t, x0_recon, t)
         
@@ -78,18 +81,82 @@ class DiffusionUtils:
             return posterior_mean + torch.exp(0.5 * posterior_log_var) * z
     
     @torch.no_grad()
-    def p_sample_loop(self, model, total_timesteps, shape):
+    def p_sample_loop(self, model, total_timesteps, shape, save_imgs=False):
         model.eval()
         x_t = torch.randn(shape, device=model.device)
         batch_size = shape[0]
         
         for t_idx in reversed(range(total_timesteps)):
-            t = torch.randint(0, total_timesteps, (batch_size,), dtype=torch.long)
+            t = torch.full((batch_size,), t_idx, dtype=torch.long, device=model.device)
             x_t = self.p_sample(model, x_t, t, t_idx)
+            
+            if save_imgs:
+                if t_idx % 100 == 0:
+                    x_t_ = (x_t + 1.0) / 2.0
+                    x_t_ = torch.clamp(x_t_, 0.0, 1.0)
+                    
+                    save_image(x_t_[0], f"step_{t_idx:01d}.png")
         
         model.train()
         return x_t
-
+    
+    @torch.no_grad()
+    def interpolate(self, model, x0_1, x0_2, t_idx=500, num_lambdas=5, save_path="interpolation_grid.png"):
+        model.eval()
+        
+        if len(x0_1.shape) == 3: x0_1 = x0_1.unsqueeze(0)
+        if len(x0_2.shape) == 3: x0_2 = x0_2.unsqueeze(0)
+        
+        device = x0_1.device
+        batch_size = x0_1.shape[0]
+        
+        noise = torch.randn_like(x0_1, device=device)
+        t_tensor = torch.full((batch_size,), t_idx, dtype=torch.long, device=device)
+        
+        z_t_1 = self.q_sample(x0_1, t_tensor, noise=noise)
+        x_t_2 = self.q_sample(x0_2, t_tensor, noise=noise)
+        
+        lambdas = torch.linspace(0.0, 1.0, steps=num_lambdas, device=device)
+        interp_images = []
+        
+        for lam in lambdas:
+            xt_lam = (1.0 - lam.item()) * z_t_1 + lam.item() * x_t_2
+            
+            curr_x_t = xt_lam.clone()
+            
+            for step in reversed(range(t_idx + 1)):
+                t_step = torch.full((batch_size,), step, dtype=torch.long, device=device)
+                curr_x_t = self.p_sample(model, curr_x_t, t_step, step)
+                
+            curr_x_t = (curr_x_t + 1.0) / 2.0
+            curr_x_t = torch.clamp(curr_x_t, 0.0, 1.0)
+            interp_images.append(curr_x_t[0]) 
+            
+        grid = make_grid(torch.stack(interp_images), nrow=num_lambdas, padding=2)
+        save_image(grid, save_path)
+        
+        model.train()
+    
+    @torch.no_grad()
+    def forward_process_steps(self, x0, num_steps=10):
+        if len(x0.shape) == 3:
+            x0 = x0.unsqueeze(0)
+            
+        device = x0.device
+        total_T = len(self.betas)
+        
+        step_indices = torch.linspace(0, total_T - 1, steps=num_steps, dtype=torch.long, device=device)
+        
+        for t_ in step_indices:
+            t_idx = t_.item()
+            t = torch.full((x0.shape[0],), t_idx, dtype=torch.long, device=device)
+            
+            x_t = self.q_sample(x0, t)
+            x_t = (x_t + 1.0) / 2.0
+            x_t = torch.clamp(x_t, 0.0, 1.0)
+            
+            save_image(x_t[0], f"step_{t_idx:01d}.png")
+            
 class EMA:
     def __init__(self, model, decay=0.9999):
         self.model = model

@@ -18,3 +18,5 @@
 | ![DORODORO](../Others/DORODORODORODORO.png) | ![DORODORO](../Others/DORODORODORODORO.png) | ![DORODORO](../Others/DORODORODORODORO.png) |
 
 나는 개똥벌레다. 
+
+[Go To](https://mine3873.github.io/posts/difussion/)
